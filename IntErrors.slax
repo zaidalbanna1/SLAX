@@ -1,0 +1,327 @@
+/*
+   ------------------------------------------
+   This script provides an example of 
+   combining outputs of a couple of 
+   commands into a single output to help 
+   reduce the time it takes to debug issues. 
+
+   Author: Zaid AlBanna                      
+   Date: April 11th 2017                     
+   ------------------------------------------
+*/
+
+/* This is a boilerplate for all of JUNOS slax scripts */
+version 1.1;
+
+ns junos = "http://xml.juniper.net/junos/*/junos";
+ns xnm   = "http://xml.juniper.net/xnm/1.1/xnm";
+ns jcs   = "http://xml.juniper.net/junos/commit-scripts/1.0";
+ns curl extension = "http://xml.libslax.org/curl";
+ 
+import "../import/junos.xsl";
+
+/* Boilerplate ends here */
+
+       
+/* This is a Global Variable */
+var $cmd1 = {<get-pfe-statistics>;}
+var $cmd2 = <get-interface-information> {
+                <extensive>; 
+            }
+
+param $j = 0; 
+
+param $ifd1 = "";
+param $ifd2 = "";
+
+match / {
+   <op-script-results>{
+
+       var $arguments = {
+            <argument>{
+                <name> "Input IFD ";
+                <description> "Ingress IFD to check errors on";
+            }
+            <argument>{
+                <name> "Output IFD ";
+                <description> "Egress IFD to check errors on";
+            }
+       }
+
+       /* Here we are defining a pattern that represents the inteface types */
+       /* we are going to require for the script. This is a part of the method */
+       /* we use to verify the input entered by users */
+
+       var $ifd1 = {expr jcs:get-input("Enter ingress (ex: ge-0/0/0): ");}
+       var $ifd2 = {expr jcs:get-input("Enter egress (ex: ge-1/0/0): ");}
+       var $rslt1 = { call ChkInOut( $ifd1, $ifd2 ); }
+       var $rslt2 = { call ChkInSyntx( $ifd1 ); }
+       var $rslt3 = { call ChkOutSyntx( $ifd2 ); }
+       var $sum = $rslt1+$rslt2+$rslt3;
+       if ( $sum < 3 )
+       {
+            <output> " Error in interface values. interfaces must be different and must be valid interface names. ";
+       } else
+       { 
+	    /* Send Junos XML API Element via jcs:invoke */
+            var $resultspfe = jcs:invoke( $cmd1 );
+            var $resultsifd = jcs:invoke( $cmd2 );
+
+            /* Create node list based on location path, loop through each node */
+            for-each($resultspfe/pfe-local-traffic-statistics/descendant::*)
+            {
+            }
+            for-each($resultsifd/physical-interface[name==$ifd1]/descendant::*) 
+            { 
+            }
+
+            for-each($resultsifd/physical-interface[name==$ifd2]/descendant::*) 
+            { 
+            }
+            var $in1 = { call Ifd1InputErrors( $resultsifd, $ifd1 ); }
+            var $in2 = { call Ifd1OutputErrors( $resultsifd, $ifd1 ); }
+            var $out1 = { call Ifd2InputErrors( $resultsifd, $ifd2 ); }
+            var $out2 = { call Ifd2OutputErrors( $resultsifd, $ifd2 ); }
+            var $ifd1info = { call Ifd1Info( $resultsifd, $ifd1 ); }
+            var $ifd2info = { call Ifd2Info( $resultsifd, $ifd2 ); }
+
+            var $ifd1stats = { call Ifd1StatsErrors( $resultsifd, $ifd1info); }
+            var $ifd2stats = { call Ifd2StatsErrors( $resultsifd, $ifd2info); }
+
+            var $pfestat = { call pfestats( $resultspfe ); }
+
+            var $date = $localtime;
+
+            call SendOutput ($ifd1,$ifd2,$in1,$in2,$out1,$out2,$ifd1stats,$ifd2stats,$pfestat,$date); 
+        }
+   }
+}
+
+template SendOutput ($ifd1,$ifd2,$in1,$in2,$out1,$out2,$ifd1stats,$ifd2stats,$pfestat,$date)
+{
+    /* 
+     This function gets passed a string, it splits it based on ';', and 
+     outputs it to the screen. 
+    */
+
+    var $pattern = "(;)";
+    var $list = "0;1;2;3;4;5;6;7;8;9;10";
+    /* var $list = "0;1;2"; */
+                            
+    var $substring1 = jcs:split($pattern, $in1);
+    var $substring2 = jcs:split($pattern, $in2);
+    var $substring3 = jcs:split($pattern, $out1);
+    var $substring4 = jcs:split($pattern, $out2);
+    var $ifd1statserr = jcs:split($pattern, $ifd1stats);
+    var $ifd2statserr = jcs:split($pattern, $ifd2stats);
+    var $index = jcs:split($pattern, $list);
+    var $pfe = jcs:split($pattern, $pfestat);
+
+    <output> " "; 
+    <output> "Time " _ $date; 
+    <output> "Ingress   " _ $ifd1 _ "                                           Egress " _ $ifd2 _ "                                                 PFE"; 
+    <output> "         " _ $ifd1statserr[1] _ "                                          " _ $ifd2statserr[1]; 
+    <output> "         " _ $ifd1statserr[2] _ "                                          " _ $ifd2statserr[2]; 
+    <output> " Input                         Output                        Input                           Output"; 
+    for-each($index)
+    {
+        var $i = .;
+        var $j = . + 1;
+        <output> jcs:printf("%-30s%-30s%-32s%-32s%-33s",$substring1[$j], $substring2[$j], $substring3[$j], $substring4[$j], $pfe[$j]);
+    }
+}
+
+template Ifd1InputErrors ($resultsifd, $ifd1)
+{
+    /* 
+     This function gets passed two variables, it checks whether they are
+     the same or not, and returns the result. 
+    */
+    for-each($resultsifd/physical-interface[name==$ifd1]/input-error-list/descendant::*) 
+    { 
+        <output> " " _ name() _ " " _ . _ ";"; 
+    }
+}
+
+template Ifd2InputErrors ($resultsifd, $ifd2)
+{
+    /* 
+     This function gets passed two variables, it checks whether they are
+     the same or not, and returns the result. 
+    */
+    for-each($resultsifd/physical-interface[name==$ifd2]/input-error-list/descendant::*) 
+    { 
+        <output> " " _ name() _ " " _ . _ ";"; 
+    }
+}
+
+template Ifd1OutputErrors ($resultsifd, $ifd1)
+{
+    /* 
+     This function gets passed two variables, it checks whether they are
+     the same or not, and returns the result. 
+    */
+    for-each($resultsifd/physical-interface[name==$ifd1]/output-error-list/descendant::*) 
+    { 
+        <output> " " _ name() _ " " _ . _ ";"; 
+    }
+}
+
+template Ifd2OutputErrors ($resultsifd, $ifd2)
+{
+    /* 
+     This function gets passed two variables, it checks whether they are
+     the same or not, and returns the result. 
+    */
+    for-each($resultsifd/physical-interface[name==$ifd2]/output-error-list/descendant::*) 
+    { 
+        <output> " " _ name() _ " " _ . _ ";"; 
+    }
+}
+
+template Ifd1StatsErrors ($resultsifd, $ifd1info)
+{
+    /* 
+     This function gets passed two variables, it selects interface errors from 
+     the interface output, and returns these errors to main.
+    */
+    var $pattern = "(;)";
+    var $list = jcs:split($pattern, $ifd1info);
+
+    for-each($list)
+    { 
+        var $element = .;
+        if( contains( $element, "bpdu-error" ) ) 
+        {
+            /* The output statement below allows for the functin to return the value to the main */
+            /* <output> " In IfdStatsErrors Found ...   " _ .;  */
+            var $err1 = $element;
+            <output> $err1;
+        }else if( contains( $element, "l2pt-error" ) ) 
+        {
+            /* The output statement below allows for the functin to return the value to the main */
+            /* <output> " In IfdStatsErrors Found ...   " _ .;  */
+            var $err2 = $element;
+            <output> ";" _ $err2;
+        }
+    }
+}
+
+template Ifd2StatsErrors ($resultsifd, $ifd2info)
+{
+    /* 
+     This function gets passed two variables, it selects interface errors from 
+     the interface output, and returns these errors to main.
+    */
+
+    var $pattern = "(;)";
+    var $list = jcs:split($pattern, $ifd2info);
+
+    for-each($list)
+    { 
+        var $element = .;
+        if( contains( $element, "bpdu-error" ) ) 
+        {
+            var $err1 = $element;
+            <output> $err1;
+        }else if( contains( $element, "l2pt-error" ) ) 
+        {
+            var $err2 = $element;
+            <output> ";" _ $err2;
+        }
+    }
+}
+
+template Ifd1Info ($resultsifd, $ifd1)
+{
+    /* 
+     This function gets passed two variables, it collects the full output of show interface extensive
+     for the passed $ifd and returns the results. 
+    */
+        <output> "$ifd: " _ $ifd1;
+
+    for-each($resultsifd/physical-interface[name==$ifd1]/descendant::*) 
+    { 
+        <output> " " _ name() _ " " _ . _ ";"; 
+    }
+}
+
+template Ifd2Info ($resultsifd, $ifd2)
+{
+    /* 
+     This function gets passed two variables, it collects the full output of show interface extensive
+     for the passed $ifd and returns the results. 
+    */
+        <output> "$ifd: " _ $ifd2;
+
+    for-each($resultsifd/physical-interface[name==$ifd2]/descendant::*) 
+    { 
+        <output> " " _ name() _ " " _ . _ ";"; 
+    }
+}
+
+template pfestats ($resultspfe)
+{
+    /* Create node list based on location path, loop through each node */
+    for-each($resultspfe/pfe-local-traffic-statistics/descendant::*)
+    {
+        <output> " " _ name() _ " " _ . _ ";"; 
+    }
+}
+
+template get-day-of-week 
+{
+    expr substring( $localtime, 1, 4 ); 
+}
+
+template ChkInOut ($ifd1,$ifd2)
+{
+    /* 
+       This function gets passed two variables, it checks whether they are
+       the same or not, and returns the result. 
+    */
+    if( $ifd1 != $ifd2 )
+    {
+        expr substring( 1, 1, 15 );
+    } else 
+    {
+        expr substring( 0, 1, 15 );
+    }
+}
+
+template ChkInSyntx ($ifd1)
+{
+   /* 
+    This function gets passed the user input, it checks its syntax, then
+    outputs an error is the syntax does not match what is expected. 
+   */
+
+   var $pattern = "(([f|g|x][e])(-)([0-9])(/)([0-9])(/)([0-9]))";
+   var $checkin = jcs:regex($pattern,$ifd1);
+
+   if( $checkin )
+   {
+       expr substring( 1, 1, 15 );
+   } else 
+   {
+       expr substring( 0, 1, 15 );
+   }
+}
+
+template ChkOutSyntx ($ifd2)
+{
+    /* 
+     This function gets passed the user input, it checks its syntax, then
+     outputs an error is the syntax does not match what is expected. 
+    */
+    var $pattern = "(([f|g|x][e])(-)([0-9])(/)([0-9])(/)([0-9]))";
+    var $checkout = jcs:regex($pattern,$ifd2);
+
+    if( $checkout )
+    {
+        expr substring( 1, 1, 15 );
+    } else 
+    {
+        expr substring( 0, 1, 15 );
+    }
+}
